@@ -97,7 +97,7 @@ fn main() {
     .unwrap();
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(16));
 
         // Call send_jobs() at the beginning of the event loop
         static INIT: std::sync::Once = std::sync::Once::new();
@@ -143,10 +143,9 @@ fn main() {
                         dst.copy_from_slice(&src);
                         dst[3] = 0xff;
                     }
-
-                    // Render the updated Pixels instance to the window
-                    pixels.render().unwrap();
                 }
+                // Render the updated Pixels instance to the window
+                pixels.render().unwrap();
             }
 
             Event::WindowEvent {
