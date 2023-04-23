@@ -8,7 +8,7 @@ use winit::{
 };
 
 const MAX_ITER: u32 = 2000;
-const BATCH_SIZE: usize = 5000;
+const BATCH_SIZE: usize = 75000;
 
 type PixelJobBatch = Vec<(usize, usize, f64, f64)>;
 type PixelResultBatch = Vec<(usize, usize, u32)>;
@@ -67,7 +67,7 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Mandelbrot Fractal")
-        .with_inner_size(LogicalSize::new(1000.0, 1000.0))
+        .with_inner_size(LogicalSize::new(2000.0, 1000.0))
         .build(&event_loop)
         .unwrap();
 
