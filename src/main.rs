@@ -78,8 +78,6 @@ fn main() {
 
     let num_workers = num_cpus::get();
     spawn_workers(num_workers, job_rx.clone(), result_tx.clone());
-    let mut pixel_buffer =
-        vec![0; (window.inner_size().width * window.inner_size().height) as usize];
 
     // Create the surface texture outside of the event loop
     let surface_texture = pixels::SurfaceTexture::new(
@@ -113,38 +111,19 @@ fn main() {
                 event: WindowEvent::Resized(size),
                 window_id,
             } if window_id == window.id() => {
-                pixel_buffer.resize(
-                    (size.width * size.height) as usize,
-                    0,
-                );
                 send_jobs(size, &job_tx);
             }
             Event::RedrawRequested(_) => {
-                let mut redraw_requested = false;
-
-                while let Ok(result_batch) = result_rx.try_recv() {
-                    for (x, y, color) in result_batch {
-                        let index = (y * window.inner_size().width as usize) + x;
-                        pixel_buffer[index] = color;
-                    }
-
-                    // Request a redraw only after processing results
-                    redraw_requested = true;
-                    break;
-                }
-
-                if redraw_requested {
-                    // Update the Pixels instance with the pixel buffer
+                if let Ok(result_batch) = result_rx.try_recv() {
                     let frame: &mut [u8] = pixels.frame_mut();
-                    for (dst, src) in frame
-                        .chunks_exact_mut(4)
-                        .zip(pixel_buffer.iter().map(|&c| c.to_ne_bytes()))
-                    {
-                        dst.copy_from_slice(&src);
+                    let width = window.inner_size().width as usize;
+                    for (x, y, color) in result_batch {
+                        let index = (y * width) + x;
+                        let dst = &mut frame[4 * index..4 * (index + 1)];
+                        dst.copy_from_slice(&color.to_ne_bytes());
                         dst[3] = 0xff;
-                    }
-                }
-                // Render the updated Pixels instance to the window
+                    }                    
+                }                
                 pixels.render().unwrap();
             }
 
