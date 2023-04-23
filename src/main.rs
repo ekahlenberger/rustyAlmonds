@@ -30,11 +30,11 @@ fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
 
 fn color(iter: u32, max_iter: u32) -> u32 {
     let t = iter as f64 / max_iter as f64;
-    let r = (9.0 * (1.0 - t) * t * t * t * 255.0) as u32;
+    let b = (9.0 * (1.0 - t) * t * t * t * 255.0) as u32;
     let g = (15.0 * (1.0 - t) * (1.0 - t) * t * t * 255.0) as u32;
-    let b = (8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t * 255.0) as u32;
+    let r = (8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t * 255.0) as u32;
 
-    (r << 16) | (g << 8) | b
+    (0xff << 24) | (b << 16) | (g << 8) | r
 }
 
 fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<PixelResultBatch>>) {
@@ -121,7 +121,6 @@ fn main() {
                         let index = (y * width) + x;
                         let dst = &mut frame[4 * index..4 * (index + 1)];
                         dst.copy_from_slice(&color.to_ne_bytes());
-                        dst[3] = 0xff;
                     }                    
                 }                
                 pixels.render().unwrap();
