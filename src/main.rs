@@ -25,7 +25,7 @@ struct PixelResultBatch {
     pub window_width: u32,
     pub window_height: u32,
     pub pixels: Vec<u8>, //heap to avoid copy of bulk data
-    //pub count: u32,
+                         //pub count: u32,
 }
 
 fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
@@ -43,7 +43,7 @@ fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     iter
 }
 
-fn color(iter: u32, max_iter: u32) -> [u8;4] {
+fn color(iter: u32, max_iter: u32) -> [u8; 4] {
     let t = iter as f64 / max_iter as f64;
     let b = (9.0 * (1.0 - t) * t * t * t * 255.0) as u8;
     let g = (15.0 * (1.0 - t) * (1.0 - t) * t * t * 255.0) as u8;
@@ -69,15 +69,16 @@ fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<Pix
             let pixel_color = color(iterations, MAX_ITER);
             pixels.extend_from_slice(&pixel_color);
         }
-        result_tx.send(PixelResultBatch {
-            start_x: job_batch.start_x,
-            start_y: job_batch.start_y,
-            window_width: job_batch.window_width,
-            window_height: job_batch.window_height,
-            pixels: pixels,
-        }).unwrap();
+        result_tx
+            .send(PixelResultBatch {
+                start_x: job_batch.start_x,
+                start_y: job_batch.start_y,
+                window_width: job_batch.window_width,
+                window_height: job_batch.window_height,
+                pixels: pixels,
+            })
+            .unwrap();
     }
-
 }
 
 fn spawn_workers(
@@ -124,7 +125,8 @@ fn main() {
     .unwrap();
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(8));
+        *control_flow =
+            ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(8));
         //*control_flow = ControlFlow::Poll;
 
         // Call send_jobs() at the beginning of the event loop
@@ -141,33 +143,25 @@ fn main() {
                 event: WindowEvent::Resized(size),
                 window_id,
             } if window_id == window.id() => {
-
                 // Update the surface texture and pixels instance
-            let surface_texture = pixels::SurfaceTexture::new(size.width, size.height, &window);
-            pixels = pixels::Pixels::new(size.width, size.height, surface_texture).unwrap();
+                let surface_texture = pixels::SurfaceTexture::new(size.width, size.height, &window);
+                pixels = pixels::Pixels::new(size.width, size.height, surface_texture).unwrap();
 
-            // Clear the current jobs in the job_tx channel
-            while let Ok(_) = job_rx.try_recv() {}
-
-            let frame: &mut [u8] = pixels.frame_mut();
-                for pixel in frame.chunks_exact_mut(4) {
-                    pixel.copy_from_slice(&[0, 0, 0, 0xff]);
-                }
-
-            // Send new jobs with the updated window size
-            send_jobs(size.into(), &job_tx);
+                // Send new jobs with the updated window size
+                send_jobs(size.into(), &job_tx);
             }
             Event::RedrawRequested(_) => {
                 let frame: &mut [u8] = pixels.frame_mut();
+                let size = window.inner_size();
                 while let Ok(result_batch) = result_rx.try_recv() {
-                    if result_batch.window_width  == window.inner_size().width  && 
-                       result_batch.window_height == window.inner_size().height {
-                        let starting_offset = ((result_batch.start_y * result_batch.window_width * 4) + result_batch.start_x * 4)  as usize;
+                    if result_batch.window_width == size.width &&
+                       result_batch.window_height == size.height
+                    {
+                        let starting_offset =((result_batch.start_y * result_batch.window_width * 4)+ result_batch.start_x * 4) as usize;
                         let ending_offset = starting_offset + (result_batch.pixels.len()) as usize;
-                        frame[starting_offset..ending_offset]
-                            .copy_from_slice(&result_batch.pixels);
-                    }                    
-                }                
+                        frame[starting_offset..ending_offset].copy_from_slice(&result_batch.pixels);
+                    }
+                }
                 pixels.render().unwrap();
             }
 
@@ -188,21 +182,26 @@ fn send_jobs(size: winit::dpi::PhysicalSize<u32>, job_tx: &Sender<PixelJobBatch>
 
     let pixel_count = size.width * size.height;
     let batches = (pixel_count / BATCH_SIZE as u32) + 1;
-    
+
     for batch in 0..batches {
         let start_x = (batch * BATCH_SIZE as u32) % size.width;
         let start_y = (batch * BATCH_SIZE as u32) / size.width;
-        
-        let count = if batch == batches-1 {pixel_count % BATCH_SIZE as u32}
-                         else {BATCH_SIZE};
-        job_tx.send(PixelJobBatch {
-            start_x,
-            start_y,
-            window_width: size.width,
-            window_height: size.height,
-            count,
-            scale_x,
-            scale_y,
-        }).unwrap();
+
+        let count = if batch == batches - 1 {
+            pixel_count % BATCH_SIZE as u32
+        } else {
+            BATCH_SIZE
+        };
+        job_tx
+            .send(PixelJobBatch {
+                start_x,
+                start_y,
+                window_width: size.width,
+                window_height: size.height,
+                count,
+                scale_x,
+                scale_y,
+            })
+            .unwrap();
     }
 }
