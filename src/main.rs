@@ -7,8 +7,8 @@ use winit::{
     window::WindowBuilder,
 };
 
-const MAX_ITER: u32 = 1500;
-const BATCH_SIZE: u32 = 160000;
+const MAX_ITER: u32 = 500;
+const BATCH_SIZE: u32 = 5000;
 
 struct PixelJobBatch {
     pub start_x: u32,
@@ -124,8 +124,8 @@ fn main() {
     .unwrap();
 
     event_loop.run(move |event, _, control_flow| {
-        //*control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(8));
-        *control_flow = ControlFlow::Poll;
+        *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(8));
+        //*control_flow = ControlFlow::Poll;
 
         // Call send_jobs() at the beginning of the event loop
         // static INIT: std::sync::Once = std::sync::Once::new();
@@ -158,10 +158,10 @@ fn main() {
             send_jobs(size.into(), &job_tx);
             }
             Event::RedrawRequested(_) => {
+                let frame: &mut [u8] = pixels.frame_mut();
                 while let Ok(result_batch) = result_rx.try_recv() {
                     if result_batch.window_width  == window.inner_size().width  && 
                        result_batch.window_height == window.inner_size().height {
-                        let frame: &mut [u8] = pixels.frame_mut();
                         let starting_offset = ((result_batch.start_y * result_batch.window_width * 4) + result_batch.start_x * 4)  as usize;
                         let ending_offset = starting_offset + (result_batch.pixels.len()) as usize;
                         frame[starting_offset..ending_offset]
