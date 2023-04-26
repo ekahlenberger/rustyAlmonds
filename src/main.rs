@@ -7,8 +7,8 @@ use winit::{
     window::WindowBuilder,
 };
 
-const MAX_ITER: u32 = 2000;
-const BATCH_SIZE: u32 = 20000;
+const MAX_ITER: u32 = 1500;
+const BATCH_SIZE: u32 = 160000;
 
 struct PixelJobBatch {
     pub start_x: u32,
@@ -55,9 +55,14 @@ fn color(iter: u32, max_iter: u32) -> [u8;4] {
 fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<PixelResultBatch>>) {
     while let Ok(job_batch) = job_rx.recv() {
         let mut pixels = Vec::with_capacity((job_batch.count * 4) as usize);
-        for count in 0..job_batch.count {
-            let x = job_batch.start_x + (count % job_batch.window_width);
-            let y = job_batch.start_y + (count / job_batch.window_width);
+        let mut x = job_batch.start_x;
+        let mut y = job_batch.start_y;
+        for _ in 0..job_batch.count {
+            x += 1;
+            if x >= job_batch.window_width {
+                x = 0;
+                y += 1;
+            }
             let cx = (x as f64 * job_batch.scale_x) - 2.0;
             let cy = (y as f64 * job_batch.scale_y) - 1.0;
             let iterations = mandelbrot(cx, cy, MAX_ITER);
@@ -72,6 +77,7 @@ fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<Pix
             pixels: pixels,
         }).unwrap();
     }
+
 }
 
 fn spawn_workers(
@@ -90,7 +96,7 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Mandelbrot Fractal")
-        .with_inner_size(LogicalSize::new(2000.0, 1000.0))
+        .with_inner_size(LogicalSize::new(2345, 1234))
         .build(&event_loop)
         .unwrap();
 
@@ -118,14 +124,14 @@ fn main() {
     .unwrap();
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(16));
-        //*control_flow = ControlFlow::Poll;
+        //*control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(8));
+        *control_flow = ControlFlow::Poll;
 
         // Call send_jobs() at the beginning of the event loop
-        static INIT: std::sync::Once = std::sync::Once::new();
-        INIT.call_once(|| {
-            send_jobs(window.inner_size(), &job_tx);
-        });
+        // static INIT: std::sync::Once = std::sync::Once::new();
+        // INIT.call_once(|| {
+        //     send_jobs(window.inner_size(), &job_tx);
+        // });
 
         match event {
             Event::RedrawEventsCleared => {
@@ -135,31 +141,32 @@ fn main() {
                 event: WindowEvent::Resized(size),
                 window_id,
             } if window_id == window.id() => {
-                let surface_texture = pixels::SurfaceTexture::new(
-                    size.width as u32,
-                    size.height as u32,
-                    &window,
-                );            
-                // Create the Pixels instance outside of the event loop
-                pixels = pixels::Pixels::new(
-                    size.width as u32,
-                    size.height as u32,
-                    surface_texture,
-                )
-                .unwrap();
-                //pixels.frame_mut().fill(0);
-                send_jobs(size, &job_tx);
+
+                // Update the surface texture and pixels instance
+            let surface_texture = pixels::SurfaceTexture::new(size.width, size.height, &window);
+            pixels = pixels::Pixels::new(size.width, size.height, surface_texture).unwrap();
+
+            // Clear the current jobs in the job_tx channel
+            while let Ok(_) = job_rx.try_recv() {}
+
+            let frame: &mut [u8] = pixels.frame_mut();
+                for pixel in frame.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(&[0, 0, 0, 0xff]);
+                }
+
+            // Send new jobs with the updated window size
+            send_jobs(size.into(), &job_tx);
             }
             Event::RedrawRequested(_) => {
                 while let Ok(result_batch) = result_rx.try_recv() {
                     if result_batch.window_width  == window.inner_size().width  && 
                        result_batch.window_height == window.inner_size().height {
-                    let frame: &mut [u8] = pixels.frame_mut();
-                    let starting_offset = ((result_batch.start_y * result_batch.window_width * 4) + result_batch.start_x * 4)  as usize;
-                    let ending_offset = starting_offset + (result_batch.pixels.len()) as usize;
-                    frame[starting_offset .. ending_offset]
-                        .copy_from_slice(&result_batch.pixels);
-                    }
+                        let frame: &mut [u8] = pixels.frame_mut();
+                        let starting_offset = ((result_batch.start_y * result_batch.window_width * 4) + result_batch.start_x * 4)  as usize;
+                        let ending_offset = starting_offset + (result_batch.pixels.len()) as usize;
+                        frame[starting_offset..ending_offset]
+                            .copy_from_slice(&result_batch.pixels);
+                    }                    
                 }                
                 pixels.render().unwrap();
             }
@@ -179,23 +186,20 @@ fn send_jobs(size: winit::dpi::PhysicalSize<u32>, job_tx: &Sender<PixelJobBatch>
     let scale_x = 3.0 / size.width as f64;
     let scale_y = 2.0 / size.height as f64;
 
-    let batches = ((size.width * size.height) / BATCH_SIZE as u32) + 1;
+    let pixel_count = size.width * size.height;
+    let batches = (pixel_count / BATCH_SIZE as u32) + 1;
     
     for batch in 0..batches {
         let start_x = (batch * BATCH_SIZE as u32) % size.width;
         let start_y = (batch * BATCH_SIZE as u32) / size.width;
-        let window_width = size.width;
-        let window_height = size.height;
         
-        let scale_x = scale_x;
-        let scale_y = scale_y;
-        let count = if batch == batches-1 {(size.width * size.height) % BATCH_SIZE as u32}
+        let count = if batch == batches-1 {pixel_count % BATCH_SIZE as u32}
                          else {BATCH_SIZE};
         job_tx.send(PixelJobBatch {
             start_x,
             start_y,
-            window_width,
-            window_height,
+            window_width: size.width,
+            window_height: size.height,
             count,
             scale_x,
             scale_y,
