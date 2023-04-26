@@ -8,10 +8,25 @@ use winit::{
 };
 
 const MAX_ITER: u32 = 2000;
-const BATCH_SIZE: usize = 75000;
+const BATCH_SIZE: u32 = 20000;
 
-type PixelJobBatch = Vec<(usize, usize, f64, f64)>;
-type PixelResultBatch = Vec<(usize, usize, u32)>;
+struct PixelJobBatch {
+    pub start_x: u32,
+    pub start_y: u32,
+    pub window_width: u32,
+    pub window_height: u32,
+    pub scale_x: f64,
+    pub scale_y: f64,
+    pub count: u32,
+}
+struct PixelResultBatch {
+    pub start_x: u32,
+    pub start_y: u32,
+    pub window_width: u32,
+    pub window_height: u32,
+    pub pixels: Vec<u8>, //heap to avoid copy of bulk data
+    //pub count: u32,
+}
 
 fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     let mut x = 0.0;
@@ -28,26 +43,34 @@ fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     iter
 }
 
-fn color(iter: u32, max_iter: u32) -> u32 {
+fn color(iter: u32, max_iter: u32) -> [u8;4] {
     let t = iter as f64 / max_iter as f64;
-    let b = (9.0 * (1.0 - t) * t * t * t * 255.0) as u32;
-    let g = (15.0 * (1.0 - t) * (1.0 - t) * t * t * 255.0) as u32;
-    let r = (8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t * 255.0) as u32;
+    let b = (9.0 * (1.0 - t) * t * t * t * 255.0) as u8;
+    let g = (15.0 * (1.0 - t) * (1.0 - t) * t * t * 255.0) as u8;
+    let r = (8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t * 255.0) as u8;
 
-    (0xff << 24) | (b << 16) | (g << 8) | r
+    [0xff, b, g, r]
 }
 
 fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<PixelResultBatch>>) {
     while let Ok(job_batch) = job_rx.recv() {
-        let mut result_batch = Vec::with_capacity(job_batch.len());
-
-        for (x, y, cx, cy) in job_batch {
-            let iter = mandelbrot(cx, cy, MAX_ITER);
-            let pixel_color = color(iter, MAX_ITER);
-            result_batch.push((x, y, pixel_color));
+        let mut pixels = Vec::with_capacity((job_batch.count * 4) as usize);
+        for count in 0..job_batch.count {
+            let x = job_batch.start_x + (count % job_batch.window_width);
+            let y = job_batch.start_y + (count / job_batch.window_width);
+            let cx = (x as f64 * job_batch.scale_x) - 2.0;
+            let cy = (y as f64 * job_batch.scale_y) - 1.0;
+            let iterations = mandelbrot(cx, cy, MAX_ITER);
+            let pixel_color = color(iterations, MAX_ITER);
+            pixels.extend_from_slice(&pixel_color);
         }
-
-        result_tx.send(result_batch).unwrap();
+        result_tx.send(PixelResultBatch {
+            start_x: job_batch.start_x,
+            start_y: job_batch.start_y,
+            window_width: job_batch.window_width,
+            window_height: job_batch.window_height,
+            pixels: pixels,
+        }).unwrap();
     }
 }
 
@@ -96,6 +119,7 @@ fn main() {
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(16));
+        //*control_flow = ControlFlow::Poll;
 
         // Call send_jobs() at the beginning of the event loop
         static INIT: std::sync::Once = std::sync::Once::new();
@@ -111,17 +135,31 @@ fn main() {
                 event: WindowEvent::Resized(size),
                 window_id,
             } if window_id == window.id() => {
+                let surface_texture = pixels::SurfaceTexture::new(
+                    size.width as u32,
+                    size.height as u32,
+                    &window,
+                );            
+                // Create the Pixels instance outside of the event loop
+                pixels = pixels::Pixels::new(
+                    size.width as u32,
+                    size.height as u32,
+                    surface_texture,
+                )
+                .unwrap();
+                //pixels.frame_mut().fill(0);
                 send_jobs(size, &job_tx);
             }
             Event::RedrawRequested(_) => {
-                if let Ok(result_batch) = result_rx.try_recv() {
+                while let Ok(result_batch) = result_rx.try_recv() {
+                    if result_batch.window_width  == window.inner_size().width  && 
+                       result_batch.window_height == window.inner_size().height {
                     let frame: &mut [u8] = pixels.frame_mut();
-                    let width = window.inner_size().width as usize;
-                    for (x, y, color) in result_batch {
-                        let index = (y * width) + x;
-                        let dst = &mut frame[4 * index..4 * (index + 1)];
-                        dst.copy_from_slice(&color.to_ne_bytes());
-                    }                    
+                    let starting_offset = ((result_batch.start_y * result_batch.window_width * 4) + result_batch.start_x * 4)  as usize;
+                    let ending_offset = starting_offset + (result_batch.pixels.len()) as usize;
+                    frame[starting_offset .. ending_offset]
+                        .copy_from_slice(&result_batch.pixels);
+                    }
                 }                
                 pixels.render().unwrap();
             }
@@ -141,22 +179,26 @@ fn send_jobs(size: winit::dpi::PhysicalSize<u32>, job_tx: &Sender<PixelJobBatch>
     let scale_x = 3.0 / size.width as f64;
     let scale_y = 2.0 / size.height as f64;
 
-    let mut job_batch = Vec::with_capacity(BATCH_SIZE);
-
-    for y in 0..size.height {
-        for x in 0..size.width {
-            let cx = x as f64 * scale_x - 2.0;
-            let cy = y as f64 * scale_y - 1.0;
-            job_batch.push((x as usize, y as usize, cx, cy));
-
-            if job_batch.len() == BATCH_SIZE {
-                job_tx.send(job_batch).unwrap();
-                job_batch = Vec::with_capacity(BATCH_SIZE);
-            }
-        }
-    }
-
-    if !job_batch.is_empty() {
-        job_tx.send(job_batch).unwrap();
+    let batches = ((size.width * size.height) / BATCH_SIZE as u32) + 1;
+    
+    for batch in 0..batches {
+        let start_x = (batch * BATCH_SIZE as u32) % size.width;
+        let start_y = (batch * BATCH_SIZE as u32) / size.width;
+        let window_width = size.width;
+        let window_height = size.height;
+        
+        let scale_x = scale_x;
+        let scale_y = scale_y;
+        let count = if batch == batches-1 {(size.width * size.height) % BATCH_SIZE as u32}
+                         else {BATCH_SIZE};
+        job_tx.send(PixelJobBatch {
+            start_x,
+            start_y,
+            window_width,
+            window_height,
+            count,
+            scale_x,
+            scale_y,
+        }).unwrap();
     }
 }
