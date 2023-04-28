@@ -7,8 +7,8 @@ use winit::{
     window::WindowBuilder,
 };
 
-const MAX_ITER: u32 = 500;
-const BATCH_SIZE: u32 = 5000;
+const MAX_ITER: u32 = 100;
+const BATCH_SIZE: u32 = 12000;
 
 struct PixelJobBatch {
     pub start_x: u32,
@@ -18,6 +18,9 @@ struct PixelJobBatch {
     pub scale_x: f64,
     pub scale_y: f64,
     pub count: u32,
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub zoom: f64,
 }
 struct PixelResultBatch {
     pub start_x: u32,
@@ -25,8 +28,22 @@ struct PixelResultBatch {
     pub window_width: u32,
     pub window_height: u32,
     pub pixels: Vec<u8>, //heap to avoid copy of bulk data
-                         //pub count: u32,
 }
+
+struct RenderOffset {
+    zoom: f64,
+    offset_x: f64,
+    offset_y: f64,
+}
+
+struct MousePosition {
+    x: f64,
+    y: f64,
+    left_button_pressed: bool,
+    drag_start_x: f64,
+    drag_start_y: f64,
+}
+
 
 fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     let mut x = 0.0;
@@ -57,16 +74,17 @@ fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<Pix
         let mut pixels = Vec::with_capacity((job_batch.count * 4) as usize);
         let mut x = job_batch.start_x;
         let mut y = job_batch.start_y;
+        let max_iter = (MAX_ITER as f64 / job_batch.zoom * 1.01).ceil() as u32;
         for _ in 0..job_batch.count {
             x += 1;
             if x >= job_batch.window_width {
                 x = 0;
                 y += 1;
             }
-            let cx = (x as f64 * job_batch.scale_x) - 2.0;
-            let cy = (y as f64 * job_batch.scale_y) - 1.0;
-            let iterations = mandelbrot(cx, cy, MAX_ITER);
-            let pixel_color = color(iterations, MAX_ITER);
+            let cx = (x as f64 * job_batch.scale_x) - 2.0 + job_batch.offset_x;
+            let cy = (y as f64 * job_batch.scale_y) - 1.0 + job_batch.offset_y;
+            let iterations = mandelbrot(cx, cy, max_iter);
+            let pixel_color = color(iterations, max_iter);
             pixels.extend_from_slice(&pixel_color);
         }
         result_tx
@@ -101,6 +119,9 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
+    let mut render_offset = RenderOffset {zoom: 1.0,offset_x: 0.0,offset_y: 0.0,};
+    let mut mouse = MousePosition { x: 0.0, y: 0.0, left_button_pressed: false, drag_start_x: 0.0, drag_start_y: 0.0, };
+
     let (job_tx, job_rx) = unbounded::<PixelJobBatch>();
     let (result_tx, result_rx) = unbounded::<PixelResultBatch>();
     let job_rx = Arc::new(job_rx);
@@ -127,13 +148,7 @@ fn main() {
     event_loop.run(move |event, _, control_flow| {
         *control_flow =
             ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(8));
-        //*control_flow = ControlFlow::Poll;
-
-        // Call send_jobs() at the beginning of the event loop
-        // static INIT: std::sync::Once = std::sync::Once::new();
-        // INIT.call_once(|| {
-        //     send_jobs(window.inner_size(), &job_tx);
-        // });
+            //*control_flow = ControlFlow::Poll;      
 
         match event {
             Event::RedrawEventsCleared => {
@@ -148,7 +163,7 @@ fn main() {
                 pixels = pixels::Pixels::new(size.width, size.height, surface_texture).unwrap();
 
                 // Send new jobs with the updated window size
-                send_jobs(size.into(), &job_tx);
+                send_jobs(size.into(), &job_tx, &render_offset);
             }
             Event::RedrawRequested(_) => {
                 let frame: &mut [u8] = pixels.frame_mut();
@@ -164,6 +179,65 @@ fn main() {
                 }
                 pixels.render().unwrap();
             }
+            Event::WindowEvent { window_id, event: WindowEvent::MouseWheel { delta,..} 
+            } if window_id == window.id() => {
+                const ZOOM_FACTOR: f64 = 1.1;
+                match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                        let old_zoom = render_offset.zoom;
+                        if y > 0.0 {
+                            render_offset.zoom /= ZOOM_FACTOR;
+                        } else if y < 0.0 {
+                            render_offset.zoom *= ZOOM_FACTOR;
+                        }
+                        let size = window.inner_size();
+            
+                        let new_scale_x = 3.0 / size.width as f64 * render_offset.zoom;
+                        let new_scale_y = 2.0 / size.height as f64 * render_offset.zoom;
+                        let scale_x = 3.0 / size.width as f64 * old_zoom;
+                        let scale_y = 2.0 / size.height as f64 * old_zoom;
+
+                        render_offset.offset_x += mouse.x * (scale_x - new_scale_x);
+                        render_offset.offset_y += mouse.y * (scale_y - new_scale_y);
+
+                        send_jobs(size.into(), &job_tx, &render_offset);
+                    }
+                    _ => (),
+                }
+            }
+            Event::WindowEvent {
+                event: WindowEvent::MouseInput { state, button, .. },
+                window_id,
+            } if window_id == window.id() => {
+                match button {
+                    winit::event::MouseButton::Left => {
+                        mouse.left_button_pressed = state == winit::event::ElementState::Pressed;
+                        if !mouse.left_button_pressed {
+                            let size = window.inner_size();
+                            let scale_x = 3.0 / size.width as f64 * render_offset.zoom;
+                            let scale_y = 2.0 / size.height as f64 * render_offset.zoom;
+                            // Update render_offset when the left mouse button is released
+                            render_offset.offset_x -= (mouse.x - mouse.drag_start_x) * scale_x;
+                            render_offset.offset_y -= (mouse.y - mouse.drag_start_y) * scale_y;
+
+                            while let Ok(_) = result_rx.try_recv() {}
+                            send_jobs(window.inner_size(), &job_tx, &render_offset);
+                        } else {
+                            // Store the initial mouse position when the left mouse button is pressed
+                            mouse.drag_start_x = mouse.x;
+                            mouse.drag_start_y = mouse.y;
+                        }
+                    }
+                    _ => (),
+                }
+            }            
+            Event::WindowEvent {
+                event: WindowEvent::CursorMoved { position, .. },
+                window_id,
+            } if window_id == window.id() => {
+                mouse.x = position.x;
+                mouse.y = position.y;
+            }
 
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -176,9 +250,9 @@ fn main() {
     });
 }
 
-fn send_jobs(size: winit::dpi::PhysicalSize<u32>, job_tx: &Sender<PixelJobBatch>) {
-    let scale_x = 3.0 / size.width as f64;
-    let scale_y = 2.0 / size.height as f64;
+fn send_jobs(size: winit::dpi::PhysicalSize<u32>, job_tx: &Sender<PixelJobBatch>, render_offset: &RenderOffset) {
+    let scale_x = 3.0 / size.width as f64 * render_offset.zoom;
+    let scale_y = 2.0 / size.height as f64 * render_offset.zoom;
 
     let pixel_count = size.width * size.height;
     let batches = (pixel_count / BATCH_SIZE as u32) + 1;
@@ -201,6 +275,9 @@ fn send_jobs(size: winit::dpi::PhysicalSize<u32>, job_tx: &Sender<PixelJobBatch>
                 count,
                 scale_x,
                 scale_y,
+                offset_x: render_offset.offset_x,
+                offset_y: render_offset.offset_y,
+                zoom: render_offset.zoom,
             })
             .unwrap();
     }
