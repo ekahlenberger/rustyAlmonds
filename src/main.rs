@@ -44,16 +44,17 @@ struct MousePosition {
     drag_start_y: f64,
 }
 
-
 fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     let mut x = 0.0;
     let mut y = 0.0;
     let mut iter = 0;
-
-    while x * x + y * y <= 4.0 && iter < max_iter {
-        let x_temp = x * x - y * y + cx;
+    let mut x2 = 0.0;
+    let mut y2 = 0.0;
+    while x2 + y2 <= 4.0 && iter < max_iter {
         y = 2.0 * x * y + cy;
-        x = x_temp;
+        x = x2 - y2 + cx;
+        x2 = x * x;
+        y2 = y * y;       
         iter += 1;
     }
 
@@ -145,6 +146,8 @@ fn main() {
     )
     .unwrap();
 
+    let mut last_zoom_change: Option<std::time::Instant> = None;
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow =
             ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(8));
@@ -177,11 +180,21 @@ fn main() {
                         frame[starting_offset..ending_offset].copy_from_slice(&result_batch.pixels);
                     }
                 }
+
+                if let Some(instant) = last_zoom_change {
+                    if instant.elapsed().as_millis() > 200 {
+                        // some time has passed since the last zoom change, all mouse wheel events have been processed
+                        while let Ok(_) = job_rx.try_recv() {} // swallow all jobs in the queue, as they are outdated
+                        send_jobs(size.into(), &job_tx, &render_offset);
+                        last_zoom_change = None;
+                    }
+                }
+                
                 pixels.render().unwrap();
             }
             Event::WindowEvent { window_id, event: WindowEvent::MouseWheel { delta,..} 
             } if window_id == window.id() => {
-                const ZOOM_FACTOR: f64 = 1.1;
+                const ZOOM_FACTOR: f64 = 1.05;
                 match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => {
                         let old_zoom = render_offset.zoom;
@@ -200,7 +213,7 @@ fn main() {
                         render_offset.offset_x += mouse.x * (scale_x - new_scale_x);
                         render_offset.offset_y += mouse.y * (scale_y - new_scale_y);
 
-                        send_jobs(size.into(), &job_tx, &render_offset);
+                        last_zoom_change = std::time::Instant::now().into();
                     }
                     _ => (),
                 }
@@ -220,7 +233,7 @@ fn main() {
                             render_offset.offset_x -= (mouse.x - mouse.drag_start_x) * scale_x;
                             render_offset.offset_y -= (mouse.y - mouse.drag_start_y) * scale_y;
 
-                            while let Ok(_) = result_rx.try_recv() {}
+                            while let Ok(_) = job_rx.try_recv() {} // swallow all jobs in the queue, as they are outdated
                             send_jobs(window.inner_size(), &job_tx, &render_offset);
                         } else {
                             // Store the initial mouse position when the left mouse button is pressed
