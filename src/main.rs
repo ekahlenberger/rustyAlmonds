@@ -47,14 +47,34 @@ struct MousePosition {
 fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     let mut x = 0.0;
     let mut y = 0.0;
-    let mut iter = 0;
+    let mut iter: u32 = 0;
     let mut x2 = 0.0;
     let mut y2 = 0.0;
+
+    // Initialize a buffer for periodicity checking
+    let check_interval = 20;
+    let mut buffer: Vec<(f64, f64)> = Vec::with_capacity(check_interval);
+
     while x2 + y2 <= 4.0 && iter < max_iter {
         y = 2.0 * x * y + cy;
         x = x2 - y2 + cx;
         x2 = x * x;
-        y2 = y * y;       
+        y2 = y * y;    
+
+        // Periodicity checking
+        if iter % check_interval as u32 == 0 {
+            // Check for any repeating patterns in the buffer
+            if buffer.iter().any(|&(prev_x, prev_y)| prev_x == x && prev_y == y) {
+                return max_iter; // Break the loop when a cycle is detected
+            }
+            // Add the current point to the buffer
+            buffer.push((x, y));
+            // Remove the oldest point from the buffer if it's full
+            if buffer.len() > check_interval {
+                buffer.remove(0);
+            }
+        }
+
         iter += 1;
     }
 
@@ -75,7 +95,7 @@ fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<Pix
         let mut pixels = Vec::with_capacity((job_batch.count * 4) as usize);
         let mut x = job_batch.start_x;
         let mut y = job_batch.start_y;
-        let max_iter = (MAX_ITER as f64 / job_batch.zoom * 1.01).ceil() as u32;
+        let max_iter = (MAX_ITER as f64 / job_batch.zoom * 1.1).ceil() as u32;
         for _ in 0..job_batch.count {
             x += 1;
             if x >= job_batch.window_width {
