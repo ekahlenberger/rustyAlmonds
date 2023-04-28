@@ -46,7 +46,10 @@ struct MousePosition {
 
 
 
-fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
+fn mandelbrot(cx: f64, cy: f64, max_iter: u32, zoom: f64) -> u32 {
+    if zoom > 0.05 && in_cardioid_or_period_2_bulb(cx, cy) {
+        return max_iter;
+    }
     let mut x = 0.0;
     let mut y = 0.0;
     let mut iter: u32 = 0;
@@ -92,8 +95,17 @@ fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     iter
 }
 
+fn in_cardioid_or_period_2_bulb(cx: f64, cy: f64) -> bool {
+    let q = (cx - 0.25).powi(2) + cy.powi(2);
+    let cardioid = q * (q + (cx - 0.25)) < 0.25 * cy.powi(2);
+    let period_2_bulb = (cx + 1.0).powi(2) + cy.powi(2) < 0.0625;
+    cardioid || period_2_bulb
+}
 
 fn color(iter: u32, max_iter: u32) -> [u8; 4] {
+    if iter >= max_iter {
+        return [0xff, 0x00, 0x00, 0x00];
+    }
     let t = iter as f64 / max_iter as f64;
     let b = (9.0 * (1.0 - t) * t * t * t * 255.0) as u8;
     let g = (15.0 * (1.0 - t) * (1.0 - t) * t * t * 255.0) as u8;
@@ -116,7 +128,7 @@ fn worker_thread(job_rx: Arc<Receiver<PixelJobBatch>>, result_tx: Arc<Sender<Pix
             }
             let cx = (x as f64 * job_batch.scale_x) - 2.0 + job_batch.offset_x;
             let cy = (y as f64 * job_batch.scale_y) - 1.0 + job_batch.offset_y;
-            let iterations = mandelbrot(cx, cy, max_iter);
+            let iterations = mandelbrot(cx, cy, max_iter, job_batch.zoom);
             let pixel_color = color(iterations, max_iter);
             pixels.extend_from_slice(&pixel_color);
         }
