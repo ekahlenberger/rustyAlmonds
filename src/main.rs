@@ -44,6 +44,8 @@ struct MousePosition {
     drag_start_y: f64,
 }
 
+
+
 fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     let mut x = 0.0;
     let mut y = 0.0;
@@ -51,35 +53,45 @@ fn mandelbrot(cx: f64, cy: f64, max_iter: u32) -> u32 {
     let mut x2 = 0.0;
     let mut y2 = 0.0;
 
-    // Initialize a buffer for periodicity checking
-    let check_interval = 20;
-    let mut buffer: Vec<(f64, f64)> = Vec::with_capacity(check_interval);
+    const CHECK_INTERVAL: usize = 20;
+    let early_bailout_threshold: f64 = 1.0/(max_iter as f64 * 1.2); 
+    let mut buffer: Vec<(f64, f64)> = Vec::with_capacity(CHECK_INTERVAL);
+    
+    let mut prev_x = x;
+    let mut prev_y = y;
 
     while x2 + y2 <= 4.0 && iter < max_iter {
         y = 2.0 * x * y + cy;
         x = x2 - y2 + cx;
         x2 = x * x;
-        y2 = y * y;    
+        y2 = y * y;
 
         // Periodicity checking
-        if iter % check_interval as u32 == 0 {
-            // Check for any repeating patterns in the buffer
+        if iter % CHECK_INTERVAL as u32 == 0 {
             if buffer.iter().any(|&(prev_x, prev_y)| prev_x == x && prev_y == y) {
-                return max_iter; // Break the loop when a cycle is detected
+                return max_iter;
             }
-            // Add the current point to the buffer
             buffer.push((x, y));
-            // Remove the oldest point from the buffer if it's full
-            if buffer.len() > check_interval {
+            if buffer.len() > CHECK_INTERVAL {
                 buffer.remove(0);
             }
         }
+
+        // Early bailout
+        let dx = (x - prev_x).abs();
+        let dy = (y - prev_y).abs();
+        if dx <= early_bailout_threshold && dy <= early_bailout_threshold {
+            return max_iter;
+        }
+        prev_x = x;
+        prev_y = y;
 
         iter += 1;
     }
 
     iter
 }
+
 
 fn color(iter: u32, max_iter: u32) -> [u8; 4] {
     let t = iter as f64 / max_iter as f64;
