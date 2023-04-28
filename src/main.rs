@@ -97,9 +97,9 @@ fn mandelbrot(cx: f64, cy: f64, max_iter: u32, zoom: f64) -> u32 {
 
 fn in_cardioid_or_period_2_bulb(cx: f64, cy: f64) -> bool {
     let q = (cx - 0.25).powi(2) + cy.powi(2);
-    let cardioid = q * (q + (cx - 0.25)) < 0.25 * cy.powi(2);
-    let period_2_bulb = (cx + 1.0).powi(2) + cy.powi(2) < 0.0625;
-    cardioid || period_2_bulb
+     
+     q * (q + (cx - 0.25)) < 0.25 * cy.powi(2) || // cardioid
+     (cx + 1.0).powi(2) + cy.powi(2) < 0.0625 // period-2 bulb
 }
 
 fn color(iter: u32, max_iter: u32) -> [u8; 4] {
@@ -253,11 +253,12 @@ fn main() {
                         let new_scale_y = 2.0 / size.height as f64 * render_offset.zoom;
                         let scale_x = 3.0 / size.width as f64 * old_zoom;
                         let scale_y = 2.0 / size.height as f64 * old_zoom;
-
+                        
                         render_offset.offset_x += mouse.x * (scale_x - new_scale_x);
                         render_offset.offset_y += mouse.y * (scale_y - new_scale_y);
 
                         last_zoom_change = std::time::Instant::now().into();
+                        
                     }
                     _ => (),
                 }
